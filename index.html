@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>Zubic's Space Adventure</title>
+
+<style>
+@font-face {
+  font-family: "Federation";
+  src: url("Federation.ttf") format("truetype");
+}
+
+body {
+  margin: 0;
+  background: black;
+  overflow: hidden;
+  touch-action: none;
+  font-family: "Federation", Arial, sans-serif;
+}
+
+canvas {
+  display: block;
+  margin: auto;
+  background: black;
+}
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="360" height="640"></canvas>
+
+<script>
+/* =====================
+   CANVAS
+===================== */
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+/* =====================
+   IMAGES
+===================== */
+const images = {};
+[
+  "background_space.png",
+  "mountains.png",
+  "player_ship.png",
+  "player_bullet.png",
+  "enemy_ship.png",
+  "enemy_bullet.png",
+  "obstacle_asteroid.png",
+  "powerup_health.png",
+  "powerup_weapon.png",
+  "boss_01.png",
+  "boss_02.png",
+  "boss_03.png",
+  "boss_04.png",
+  "boss_05.png",
+  "boss_bullet.png"
+].forEach(name => {
+  const img = new Image();
+  img.src = "images/" + name;
+  images[name] = img;
+});
+
+/* =====================
+   GAME STATE
+===================== */
+let gameState = "title";
+let score = 0;
+
+/* =====================
+   PLAYER
+===================== */
+const player = {
+  x: 40,
+  y: canvas.height / 2 - 24,
+  size: 48,
+  speed: 6,
+  health: 100,
+  maxHealth: 100,
+  weaponLevel: 1
+};
+
+/* =====================
+   ARRAYS
+===================== */
+const bullets = [];
+const enemyBullets = [];
+const enemies = [];
+const obstacles = [];
+const powerups = [];
+const explosions = [];
+
+let boss = null;
+let bossEntering = false;
+let bossHealthDisplay = 0;
+
+/* =====================
+   BACKGROUND
+===================== */
+let mountainX = 0;
+
+/* =====================
+   BOSS ANIMATION
+===================== */
+const bossFrames = [
+  images["boss_01.png"],
+  images["boss_02.png"],
+  images["boss_03.png"],
+  images["boss_04.png"],
+  images["boss_05.png"]
+];
+let bossFrameIndex = 0;
+let bossFrameDir = 1;
+let bossFrameTimer = 0;
+
+/* =====================
+   INPUT
+===================== */
+const keys = {};
+window.addEventListener("keydown", e => {
+  keys[e.key] = true;
+  if (e.key === " " && gameState !== "playing") startGame();
+});
+window.addEventListener("keyup", e => keys[e.key] = false);
+
+canvas.addEventListener("touchstart", e => {
+  if (gameState !== "playing") startGame();
+  else moveTouch(e);
+});
+canvas.addEventListener("touchmove", e => {
+  if (gameState === "playing") moveTouch(e);
+});
+
+function moveTouch(e) {
+  const rect = canvas.getBoundingClientRect();
+  player.y = e.touches[0].clientY - rect.top - player.size / 2;
+  clampPlayer();
+}
+
+/* =====================
+   HELPERS
+===================== */
+function clampPlayer() {
+  player.y = Math.max(0, Math.min(canvas.height - player.size, player.y));
+}
+
+function rectCircleCollide(px, py, size, cx, cy, r) {
+  const rx = Math.max(px, Math.min(cx, px + size));
+  const ry = Math.max(py, Math.min(cy, py + size));
+  const dx = cx - rx;
+  const dy = cy - ry;
+  return dx * dx + dy * dy < r * r;
+}
+
+function createExplosion(x, y) {
+  explosions.push({ x, y, r: 5, a: 1 });
+}
+
+/* =====================
+   START GAME
+===================== */
+function startGame() {
+  gameState = "playing";
+  score = 0;
+  player.health = player.maxHealth;
+  player.weaponLevel = 1;
+
+  bullets.length = 0;
+  enemyBullets.length = 0;
+  enemies.length = 0;
+  obstacles.length = 0;
+  powerups.length = 0;
+  explosions.length = 0;
+
+  boss = null;
+  bossEntering = false;
+  bossHealthDisplay = 0;
+}
+
+/* =====================
+   SHOOTING
+===================== */
+let lastShot = 0;
+function getShootInterval() {
+  return player.weaponLevel === 1 ? 300 :
+         player.weaponLevel === 2 ? 200 : 120;
+}
+
+function autoShoot(t) {
+  if (t - lastShot < getShootInterval()) return;
+  lastShot = t;
+  bullets.push({
+    x: player.x + player.size,
+    y: player.y + player.size / 2,
+    speed: 8
+  });
+}
+
+/* =====================
+   SPAWNS
+===================== */
+let spawnTimer = 0;
+
+function spawnEnemy() {
+  enemies.push({
+    x: canvas.width,
+    y: Math.random() * (canvas.height - 40),
+    r: 20,
+    speed: 2.5,
+    health: 20,
+    shootTimer: Math.random() * 100
+  });
+}
+
+function spawnObstacle() {
+  obstacles.push({
+    x: canvas.width,
+    y: Math.random() * (canvas.height - 40),
+    r: 22,
+    speed: 2.5,
+    health: 20
+  });
+}
+
+function spawnPowerup(type) {
+  powerups.push({
+    x: canvas.width,
+    y: Math.random() * (canvas.height - 40),
+    r: 14,
+    type
+  });
+}
+
+function spawnBoss() {
+  boss = {
+    x: canvas.width + 140,
+    y: canvas.height / 2,
+    r: 80,
+    health: 300,
+    maxHealth: 300,
+    dir: 1,
+    shootTimer: 0
+  };
+  bossEntering = true;
+  bossHealthDisplay = 0;
+}
+
+/* =====================
+   UPDATE
+===================== */
+function update(t) {
+  if (keys["ArrowUp"] || keys["w"]) player.y -= player.speed;
+  if (keys["ArrowDown"] || keys["s"]) player.y += player.speed;
+  clampPlayer();
+
+  if (!boss) mountainX -= 1;
+  if (mountainX <= -canvas.width) mountainX = 0;
+
+  spawnTimer++;
+  if (spawnTimer > 70 && !boss && score < 20) {
+    Math.random() < 0.6 ? spawnEnemy() : spawnObstacle();
+    if (Math.random() < 0.2)
+      spawnPowerup(Math.random() < 0.6 ? "health" : "weapon");
+    spawnTimer = 0;
+  }
+
+  bullets.forEach((b, i) => {
+    b.x += b.speed;
+    if (b.x > canvas.width) bullets.splice(i, 1);
+  });
+
+  enemies.forEach((e, i) => {
+    e.x -= e.speed;
+    e.shootTimer++;
+    if (e.shootTimer > 110) {
+      enemyBullets.push({ x: e.x, y: e.y, speed: 4 });
+      e.shootTimer = 0;
+    }
+    if (rectCircleCollide(player.x, player.y, player.size, e.x, e.y, e.r)) {
+      player.health -= 10;
+      createExplosion(e.x, e.y);
+      enemies.splice(i, 1);
+    }
+  });
+
+  obstacles.forEach((o, i) => {
+    o.x -= o.speed;
+    if (rectCircleCollide(player.x, player.y, player.size, o.x, o.y, o.r)) {
+      player.health -= 15;
+      createExplosion(o.x, o.y);
+      obstacles.splice(i, 1);
+    }
+  });
+
+  powerups.forEach((p, i) => {
+    p.x -= 2.5;
+    if (rectCircleCollide(player.x, player.y, player.size, p.x, p.y, p.r)) {
+      if (p.type === "health")
+        player.health = Math.min(player.maxHealth, player.health + 25);
+      else
+        player.weaponLevel = Math.min(3, player.weaponLevel + 1);
+      powerups.splice(i, 1);
+    }
+  });
+
+  enemyBullets.forEach((b, i) => {
+    b.x -= b.speed;
+    if (rectCircleCollide(player.x, player.y, player.size, b.x, b.y, 6)) {
+      player.health -= 10;
+      enemyBullets.splice(i, 1);
+    }
+  });
+
+  bullets.forEach((b, i) => {
+    enemies.forEach((e, ei) => {
+      if (rectCircleCollide(b.x, b.y, 8, e.x, e.y, e.r)) {
+        e.health -= 10;
+        bullets.splice(i, 1);
+        if (e.health <= 0) {
+          createExplosion(e.x, e.y);
+          enemies.splice(ei, 1);
+          score++;
+        }
+      }
+    });
+
+    obstacles.forEach((o, oi) => {
+      if (rectCircleCollide(b.x, b.y, 8, o.x, o.y, o.r)) {
+        o.health -= 10;
+        bullets.splice(i, 1);
+        if (o.health <= 0) {
+          createExplosion(o.x, o.y);
+          obstacles.splice(oi, 1);
+          score++;
+        }
+      }
+    });
+
+    if (boss && !bossEntering &&
+        rectCircleCollide(b.x, b.y, 8, boss.x, boss.y, boss.r)) {
+      boss.health -= 5;
+      bullets.splice(i, 1);
+      createExplosion(boss.x + Math.random() * 40 - 20,
+                      boss.y + Math.random() * 40 - 20);
+      if (boss.health <= 0) {
+        createExplosion(boss.x, boss.y);
+        gameState = "victory";
+      }
+    }
+  });
+
+  if (score >= 20 && !boss) spawnBoss();
+
+  if (boss) {
+    if (bossEntering) {
+      boss.x -= 1.5;
+      bossHealthDisplay = Math.min(bossHealthDisplay + 6, boss.maxHealth);
+      if (boss.x <= canvas.width - 120) bossEntering = false;
+    } else {
+      bossHealthDisplay += (boss.health - bossHealthDisplay) * 0.1;
+      boss.y += boss.dir * 2;
+      if (boss.y < boss.r || boss.y > canvas.height - boss.r)
+        boss.dir *= -1;
+
+      boss.shootTimer++;
+      if (boss.shootTimer > 40) {
+        enemyBullets.push({ x: boss.x - boss.r, y: boss.y, speed: 4 });
+        boss.shootTimer = 0;
+      }
+
+      bossFrameTimer++;
+      if (bossFrameTimer > 6) {
+        bossFrameIndex += bossFrameDir;
+        if (bossFrameIndex === 4 || bossFrameIndex === 0)
+          bossFrameDir *= -1;
+        bossFrameTimer = 0;
+      }
+    }
+  }
+
+  explosions.forEach((ex, i) => {
+    ex.r += 1.5;
+    ex.a -= 0.05;
+    if (ex.a <= 0) explosions.splice(i, 1);
+  });
+
+  if (player.health <= 0) gameState = "gameover";
+}
+
+/* =====================
+   DRAW
+===================== */
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.drawImage(images["background_space.png"], 0, 0, canvas.width, canvas.height);
+
+  ctx.drawImage(images["mountains.png"], mountainX, canvas.height - 120, canvas.width, 120);
+  ctx.drawImage(images["mountains.png"], mountainX + canvas.width, canvas.height - 120, canvas.width, 120);
+
+  if (gameState === "title") {
+    ctx.fillStyle = "white";
+    ctx.textAlign = "center";
+    ctx.font = "42px Federation";
+    ctx.fillText("ZUBIC’S", canvas.width / 2, 220);
+    ctx.fillText("SPACE", canvas.width / 2, 270);
+    ctx.fillText("ADVENTURE", canvas.width / 2, 320);
+    ctx.font = "20px Federation";
+    ctx.fillText("Tap or press SPACE", canvas.width / 2, 380);
+    ctx.textAlign = "left";
+    return;
+  }
+
+  if (gameState === "victory" || gameState === "gameover") {
+    ctx.fillStyle = "white";
+    ctx.textAlign = "center";
+    ctx.font = "36px Federation";
+    if (gameState === "victory") {
+      ctx.fillText("DANGER", canvas.width / 2, 260);
+      ctx.fillText("DESTROYED", canvas.width / 2, 310);
+    } else {
+      ctx.fillText("GAME OVER", canvas.width / 2, 280);
+    }
+    ctx.font = "20px Federation";
+    ctx.fillText("Tap to play again", canvas.width / 2, 350);
+ctx.fillText("or press SPACE", canvas.width / 2, 380);
+    ctx.textAlign = "left";
+    return;
+  }
+
+  ctx.drawImage(images["player_ship.png"], player.x, player.y, player.size, player.size);
+
+  bullets.forEach(b => {
+    ctx.drawImage(images["player_bullet.png"], b.x, b.y - 6, 12, 12);
+  });
+
+  enemies.forEach(e => {
+    ctx.drawImage(images["enemy_ship.png"], e.x - 20, e.y - 20, 40, 40);
+  });
+
+  obstacles.forEach(o => {
+    ctx.drawImage(images["obstacle_asteroid.png"], o.x - 22, o.y - 22, 44, 44);
+  });
+
+  powerups.forEach(p => {
+    ctx.drawImage(
+      p.type === "health" ? images["powerup_health.png"] : images["powerup_weapon.png"],
+      p.x - 14, p.y - 14, 28, 28
+    );
+  });
+
+  enemyBullets.forEach(b => {
+    ctx.drawImage(images["enemy_bullet.png"], b.x - 6, b.y - 6, 12, 12);
+  });
+
+  if (boss) {
+    ctx.drawImage(
+      bossFrames[bossFrameIndex],
+      boss.x - boss.r, boss.y - boss.r,
+      boss.r * 2, boss.r * 2
+    );
+
+    ctx.fillStyle = "white";
+    ctx.fillRect(40, 30, 280, 14);
+    ctx.fillStyle = "purple";
+    ctx.fillRect(40, 30, 280 * (bossHealthDisplay / boss.maxHealth), 14);
+  }
+
+  explosions.forEach(ex => {
+    ctx.fillStyle = `rgba(255,200,50,${ex.a})`;
+    ctx.beginPath();
+    ctx.arc(ex.x, ex.y, ex.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.fillStyle = "white";
+  ctx.font = "26px Federation";
+  ctx.fillText("❤ " + player.health, 10, canvas.height - 20);
+  ctx.fillText("★ " + score + "  W:" + player.weaponLevel, canvas.width - 210, canvas.height - 20);
+}
+
+/* =====================
+   LOOP
+===================== */
+function loop(t) {
+  if (gameState === "playing") {
+    autoShoot(t);
+    update(t);
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+
+/* =====================
+   SCALING
+===================== */
+function resizeCanvas() {
+  const scale = Math.min(window.innerWidth / canvas.width, window.innerHeight / canvas.height);
+  canvas.style.width = canvas.width * scale + "px";
+  canvas.style.height = canvas.height * scale + "px";
+}
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
+</script>
+
+</body>
+</html>
